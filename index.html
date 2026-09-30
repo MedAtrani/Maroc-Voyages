@@ -29,10 +29,23 @@ button.p{background:var(--ac);border-color:var(--ac);color:#fff}button.x{border:
 </style></head><body><main>
 <h1>📅 Suivi quotidien</h1>
 <div id="toolbar">
-  <button onclick="reloadFile()">↻ Recharger depuis le dépôt</button>
+  <button id="gh" onclick="toggleCfg()">🔗 Connexion GitHub</button>
+  <button onclick="reloadFile()">↻ Recharger</button>
   <button class="p" onclick="download()">⬇ Télécharger .xlsx</button>
   <button onclick="pick.click()">📂 Autre fichier</button>
   <input type="file" id="pick" accept=".xlsx" hidden>
+</div>
+<div class="card" id="cfgCard" style="display:none;margin-bottom:10px">
+  <p style="margin:0 0 10px;color:var(--mut);font-size:13px">Pour que chaque modification soit enregistrée automatiquement dans <b>Plan_V1.xlsx</b> sur GitHub, connecte un jeton d'accès personnel (Settings → Developer settings → Fine-grained tokens, limité à ce dépôt, permission <b>Contents: Read and write</b>).</p>
+  <table style="width:100%"><tr><td style="width:110px">Dépôt</td><td><input id="cfgRepo" placeholder="utilisateur/depot"></td></tr>
+  <tr><td>Branche</td><td><input id="cfgBranch" placeholder="main" value="main"></td></tr>
+  <tr><td>Chemin</td><td><input id="cfgPath" placeholder="Plan_V1.xlsx" value="Plan_V1.xlsx"></td></tr>
+  <tr><td>Jeton</td><td><input id="cfgToken" type="password" placeholder="github_pat_…"></td></tr></table>
+  <div style="margin-top:10px;display:flex;gap:8px">
+    <button class="p" onclick="connectGithub()">Connecter</button>
+    <button class="d" onclick="disconnectGithub()">Déconnecter</button>
+    <button onclick="toggleCfg()">Fermer</button>
+  </div>
 </div>
 <div id="path"></div>
 <div id="msg"></div>
@@ -40,6 +53,48 @@ button.p{background:var(--ac);border-color:var(--ac);color:#fff}button.x{border:
 <div class="card" id="chartCard" hidden><h2 style="margin:0 0 12px;font-size:17px">📈 Suivi des actions par jour</h2><div style="position:relative;height:260px"><canvas id="trend"></canvas></div></div>
 </main>
 <script>
+/* ---------- Connexion GitHub (lecture + écriture automatique du fichier dans le dépôt) ---------- */
+const GH_API='https://api.github.com';
+let ghCfg=JSON.parse(localStorage.getItem('ghcfg')||'null');
+let ghSha=null;
+function toggleCfg(){const c=$('#cfgCard');const show=c.style.display==='none';c.style.display=show?'block':'none';
+  if(show&&ghCfg){$('#cfgRepo').value=ghCfg.owner+'/'+ghCfg.repo;$('#cfgBranch').value=ghCfg.branch;$('#cfgPath').value=ghCfg.path;$('#cfgToken').value=ghCfg.token}}
+function b64FromBuf(buf){const bytes=new Uint8Array(buf);let bin='';const CH=0x8000;
+  for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH));return btoa(bin)}
+function bufFromB64(b64){const bin=atob(b64.replace(/\n/g,''));const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return bytes.buffer}
+async function ghGet(cfg){
+  const r=await fetch(`${GH_API}/repos/${cfg.owner}/${cfg.repo}/contents/${encodeURIComponent(cfg.path)}?ref=${encodeURIComponent(cfg.branch)}`,
+    {headers:{Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'}});
+  if(!r.ok)throw new Error('Lecture GitHub échouée (HTTP '+r.status+')');
+  return r.json()}
+async function ghPut(cfg,buf,sha){
+  const r=await fetch(`${GH_API}/repos/${cfg.owner}/${cfg.repo}/contents/${encodeURIComponent(cfg.path)}`,
+    {method:'PUT',headers:{Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json','Content-Type':'application/json'},
+     body:JSON.stringify({message:'Mise à jour du suivi — '+new Date().toLocaleString('fr-FR'),content:b64FromBuf(buf),sha,branch:cfg.branch})});
+  if(!r.ok){let d='';try{d=(await r.json()).message}catch(e){}throw new Error('Écriture GitHub échouée (HTTP '+r.status+(d?' — '+d:'')+')')}
+  return r.json()}
+async function connectGithub(){
+  const [owner,repo]=($('#cfgRepo').value||'').split('/').map(s=>s.trim());
+  const cfg={owner,repo,branch:($('#cfgBranch').value||'main').trim(),path:($('#cfgPath').value||'Plan_V1.xlsx').trim(),token:$('#cfgToken').value.trim()};
+  if(!owner||!repo||!cfg.token){msg('⚠ Renseigne le dépôt (utilisateur/depot) et le jeton','err');return}
+  msg('Connexion à GitHub…');
+  try{const f=await ghGet(cfg);ghSha=f.sha;ghCfg=cfg;localStorage.setItem('ghcfg',JSON.stringify(cfg));
+    await parse(bufFromB64(f.content),cfg.owner+'/'+cfg.repo+' ('+cfg.path+')');
+    toggleCfg();msg('✔ Connecté — chaque modification sera enregistrée automatiquement sur GitHub','ok')
+  }catch(e){msg('⚠ '+e.message,'err')}}
+function disconnectGithub(){ghCfg=null;ghSha=null;localStorage.removeItem('ghcfg');toggleCfg();msg('Connexion GitHub désactivée — sauvegarde manuelle (Télécharger .xlsx)')}
+async function saveToGithub(){
+  if(!ghCfg||!wb)return;
+  try{writeBlocks(sheetOf(wb),days,tpl);const buf=await wb.xlsx.writeBuffer();
+    if(!ghSha){const f=await ghGet(ghCfg);ghSha=f.sha}
+    const res=await ghPut(ghCfg,buf,ghSha);ghSha=res.content.sha;dirty=false;
+    msg('✔ Enregistré automatiquement sur GitHub','ok')
+  }catch(e){
+    if(/409|422/.test(e.message)){try{const f=await ghGet(ghCfg);ghSha=f.sha;return saveToGithub()}catch(e2){}}
+    msg('⚠ '+e.message+' — utilise « ⬇ Télécharger .xlsx » en secours','err')
+  }}
+
 /* ===== CORE (lecture / écriture du classeur) ===== */
 const HEAD=["Action","Objectif/jour","Réalisé","Status"];
 const clean=v=>{if(v==null)return'';if(v instanceof Date)return v.toISOString().slice(0,10);
@@ -92,11 +147,15 @@ async function parse(buf,label){wb=new ExcelJS.Workbook();await wb.xlsx.load(buf
   $('#path').textContent='🔗 '+label;render();msg('✔ Synchronisé avec '+label,'ok')}
 
 async function autoload(){
+  if(ghCfg&&ghCfg.token){
+    msg('Connexion à GitHub…');
+    try{const f=await ghGet(ghCfg);ghSha=f.sha;await parse(bufFromB64(f.content),ghCfg.owner+'/'+ghCfg.repo+' ('+ghCfg.path+')');
+      msg('✔ Connecté — enregistrement automatique sur GitHub actif','ok');return}catch(e){msg('⚠ '+e.message,'err')}}
   msg('Chargement de '+DEFAULT_PATH+'…');
   try{
     const r=await fetch(DEFAULT_PATH,{cache:'no-store'});
     if(!r.ok)throw new Error('HTTP '+r.status);
-    await parse(await r.arrayBuffer(),DEFAULT_PATH+' (dans le dépôt)');
+    await parse(await r.arrayBuffer(),DEFAULT_PATH+' (dans le dépôt, lecture seule — connecte GitHub pour l\'écriture auto)');
   }catch(e){
     $('#path').textContent='🔗 '+DEFAULT_PATH;
     $('#view').innerHTML=`<div class="card hero"><h2>Impossible de charger ${DEFAULT_PATH} automatiquement</h2>
@@ -134,7 +193,9 @@ function render(){
   <td class="st" id="s${i}">${stat(a.goal,a.done)}</td><td><button class="x" onclick="rmAct(${i})">✕</button></td></tr>`).join('')}</table></div>`}
 function ed(i,k,v){const d=day();d.actions[i][k]=v;$('#s'+i).textContent=stat(d.actions[i].goal,d.actions[i].done);
   $('.bar i').style.width=pct(d)+'%';touched()}
-function touched(){dirty=true;msg('✎ Modifié — clique sur « ⬇ Télécharger .xlsx » pour sauvegarder');clearTimeout(timer);timer=setTimeout(updateChart,400)}
+function touched(){dirty=true;clearTimeout(timer);
+  if(ghCfg){msg('Enregistrement…');timer=setTimeout(saveToGithub,900)}
+  else{msg('✎ Modifié — clique sur « ⬇ Télécharger .xlsx » pour sauvegarder');timer=setTimeout(updateChart,400)}}
 function addAct(){day().actions.push({label:'Nouvelle action',goal:'',done:''});render();touched()}
 function rmAct(i){day().actions.splice(i,1);render();touched()}
 function newDay(){const l=days.length?new Date(days[days.length-1].date+'T00:00:00Z'):new Date();if(days.length)l.setUTCDate(l.getUTCDate()+1);
