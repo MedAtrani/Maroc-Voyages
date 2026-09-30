@@ -2,17 +2,19 @@
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>📅 Suivi quotidien</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--tx:#1f2430;--mut:#7a8194;--bd:#e3e6ec;--ac:#2f6feb;--ok:#1e9e5a;--ko:#d64545}
 @media(prefers-color-scheme:dark){:root{--bg:#14161b;--card:#1d2027;--tx:#e8eaf0;--mut:#8b93a7;--bd:#2c303a}}
 *{box-sizing:border-box}body{margin:0;font:15px system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--tx)}
 main{max-width:780px;margin:0 auto;padding:20px 14px 60px}
-h1{font-size:22px;margin:0 0 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-#path{font-size:12px;color:var(--mut);margin:-6px 0 12px;word-break:break-all}#msg{font-size:12px;color:var(--mut);font-weight:400}#msg.err{color:var(--ko)}
+h1{font-size:22px;margin:0 0 4px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+#toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+#msg{font-size:12px;color:var(--mut)}#msg.err{color:var(--ko)}#msg.ok{color:var(--ok)}
+#path{font-size:12px;color:var(--mut);margin:0 0 12px;word-break:break-all}
 #chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px}
-.chip{flex:0 0 auto;min-width:78px;text-align:center}.chip small{display:block;color:var(--mut)}
-.chip.on{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac)}.chip.new{color:var(--ac);border-style:dashed}
+.chip{flex:0 0 auto;min-width:78px;text-align:center;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:10px;padding:8px 12px;cursor:pointer}
+.chip small{display:block;color:var(--mut)}.chip.on{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac)}.chip.new{color:var(--ac);border-style:dashed}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-top:10px}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap}
 .top h2{margin:0;font-size:17px;text-transform:capitalize}
@@ -25,14 +27,20 @@ button{font:inherit;cursor:pointer;border:1px solid var(--bd);background:var(--c
 button.p{background:var(--ac);border-color:var(--ac);color:#fff}button.x{border:none;color:var(--mut);padding:4px 8px}button.d{color:var(--ko)}
 .hero{text-align:center;padding:40px 16px}.hero p{color:var(--mut);max-width:440px;margin:8px auto 18px}
 </style></head><body><main>
-<h1>📅 Suivi quotidien <span><span id="msg"></span> <button id="auth" class="p" onclick="choose()" hidden>🔓 Autoriser l'écriture</button> <button id="reload" onclick="reloadFile()" hidden>↻ Recharger</button> <button id="dl" onclick="download()" hidden>⬇ Télécharger .xlsx</button> <button onclick="choose()">📂 Autre fichier</button></span></h1>
+<h1>📅 Suivi quotidien</h1>
+<div id="toolbar">
+  <button onclick="reloadFile()">↻ Recharger depuis le dépôt</button>
+  <button class="p" onclick="download()">⬇ Télécharger .xlsx</button>
+  <button onclick="pick.click()">📂 Autre fichier</button>
+  <input type="file" id="pick" accept=".xlsx" hidden>
+</div>
 <div id="path"></div>
+<div id="msg"></div>
 <div id="chips"></div><div id="view"></div>
 <div class="card" id="chartCard" hidden><h2 style="margin:0 0 12px;font-size:17px">📈 Suivi des actions par jour</h2><div style="position:relative;height:260px"><canvas id="trend"></canvas></div></div>
-<input type="file" id="pick" accept=".xlsx" hidden>
 </main>
 <script>
-/* ===== CORE (lecture / écriture du classeur, testé) ===== */
+/* ===== CORE (lecture / écriture du classeur) ===== */
 const HEAD=["Action","Objectif/jour","Réalisé","Status"];
 const clean=v=>{if(v==null)return'';if(v instanceof Date)return v.toISOString().slice(0,10);
   if(typeof v==='object'){if('result'in v)return clean(v.result);if(v.richText)return v.richText.map(t=>t.text).join('').trim();if(v.text)return String(v.text).trim();return''}
@@ -70,40 +78,41 @@ function writeBlocks(ws,blocks,tpl){
   ws.getColumn(4).width=Math.max(ws.getColumn(4).width||0,10);ws.getColumn(5).width=Math.max(ws.getColumn(5).width||0,14)}
 /* ===== FIN CORE ===== */
 
-/* ---------- Fichier lié ---------- */
-const $=s=>document.querySelector(s);
-/* >>> LIEN PAR DÉFAUT VERS TON FICHIER EXCEL <<<
-   Le fichier Plan_V1.xlsx est dans le même dossier que cette page (même dépôt GitHub),
-   donc pas besoin d'URL complète : un chemin relatif suffit et fonctionne aussi bien
-   sur GitHub Pages qu'en local (servi par un petit serveur). */
+/* Le fichier Plan_V1.xlsx est dans le même dossier que cette page (même dépôt GitHub) :
+   un simple chemin relatif suffit, lu automatiquement au chargement — aucune sélection requise. */
 const DEFAULT_PATH='Plan_V1.xlsx';
-const FSA='showOpenFilePicker'in window;
-let connecting=true,wb,handle,tpl,ro=false,days=[],cur=null,timer=null,busy=Promise.resolve();
-const idb=()=>new Promise((ok,ko)=>{const q=indexedDB.open('plan-web',1);q.onupgradeneeded=()=>q.result.createObjectStore('k');q.onsuccess=()=>ok(q.result);q.onerror=ko});
-const idbSet=async(k,v)=>{const d=await idb();d.transaction('k','readwrite').objectStore('k').put(v,k)};
-const idbGet=async k=>{const d=await idb();return new Promise(ok=>{const q=d.transaction('k').objectStore('k').get(k);q.onsuccess=()=>ok(q.result);q.onerror=()=>ok()})};
-function msg(t,e){const m=$('#msg');m.textContent=t;m.className=e?'err':''}
+const $=s=>document.querySelector(s);
+let wb,tpl,days=[],cur=null,timer=null,dirty=false;
+function msg(t,cls){const m=$('#msg');m.textContent=t;m.className=cls||''}
 
-async function parse(buf){wb=new ExcelJS.Workbook();await wb.xlsx.load(buf);const ws=sheetOf(wb);
-  tpl=captureTpl(ws);days=readBlocks(ws);const t=new Date().toISOString().slice(0,10);
+async function parse(buf,label){wb=new ExcelJS.Workbook();await wb.xlsx.load(buf);const ws=sheetOf(wb);
+  tpl=captureTpl(ws);days=readBlocks(ws);dirty=false;
+  const t=new Date().toISOString().slice(0,10);
   if(!cur||!days.find(d=>d.date===cur))cur=(days.find(d=>d.date===t)||days[days.length-1]||{}).date;
-  $('#reload').hidden=!handle;$('#dl').hidden=!!handle;$('#auth').hidden=!(FSA&&!handle&&ro);
-  $('#path').textContent='🔗 '+(handle?handle.name:DEFAULT_PATH+' (dans le dépôt)');render();
-  msg(ro&&!handle?'Lecture seule — clique sur « Autoriser l\'écriture »':'Synchronisé avec '+(handle?handle.name:'Excel'))}
-async function readHandle(){const f=await handle.getFile();await parse(await f.arrayBuffer())}
-async function choose(){
-  if(!FSA){$('#pick').click();return}
-  try{[handle]=await showOpenFilePicker({id:'plan',startIn:'desktop',types:[{description:'Excel',accept:{'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx']}}]});
-    await idbSet('h',handle);ro=false;await readHandle()}catch(e){if(e.name!=='AbortError')msg('⚠ '+e.message,1)}}
-$('#pick').onchange=async e=>{const f=e.target.files[0];if(f){handle=null;ro=false;await parse(await f.arrayBuffer())}};
-async function reconnect(){try{if(await handle.requestPermission({mode:'readwrite'})==='granted')await readHandle()}catch(e){msg('⚠ '+e.message,1)}}
-function reloadFile(){handle&&readHandle().catch(e=>msg('⚠ '+e.message,1))}
-function writeFile(){return busy=busy.then(async()=>{
-  if(!wb)return;writeBlocks(sheetOf(wb),days,tpl);if(!handle){msg(ro?'✎ Modifié en mémoire — clique sur « ⬇ Télécharger .xlsx » pour récupérer le fichier':'Modifié — clique sur « Télécharger »');updateChart();return}
-  try{const buf=await wb.xlsx.writeBuffer();const w=await handle.createWritable();await w.write(buf);await w.close();msg('✔ Enregistré dans Excel')}
-  catch(e){msg('⚠ Écriture impossible : ferme Plan_V1.xlsx dans Excel puis réessaie ('+e.name+')',1)}})}
-async function download(){writeBlocks(sheetOf(wb),days,tpl);const b=new Blob([await wb.xlsx.writeBuffer()]);
-  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='Plan_V1.xlsx';a.click()}
+  $('#path').textContent='🔗 '+label;render();msg('✔ Synchronisé avec '+label,'ok')}
+
+async function autoload(){
+  msg('Chargement de '+DEFAULT_PATH+'…');
+  try{
+    const r=await fetch(DEFAULT_PATH,{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    await parse(await r.arrayBuffer(),DEFAULT_PATH+' (dans le dépôt)');
+  }catch(e){
+    $('#path').textContent='🔗 '+DEFAULT_PATH;
+    $('#view').innerHTML=`<div class="card hero"><h2>Impossible de charger ${DEFAULT_PATH} automatiquement</h2>
+      <p>Ça marche automatiquement une fois la page ouverte via son adresse GitHub Pages (https://…).
+      Si tu as ouvert le fichier directement depuis ton PC (adresse file:///…), le navigateur bloque cette lecture par sécurité : choisis le fichier manuellement ci-dessous.</p>
+      <button class="p" onclick="pick.click()">📂 Choisir Plan_V1.xlsx</button></div>`;
+    $('#chips').innerHTML='';$('#chartCard').hidden=true;msg('⚠ '+e.message,'err')
+  }}
+reloadFile=()=>autoload();
+$('#pick').onchange=async e=>{const f=e.target.files[0];if(f)await parse(await f.arrayBuffer(),f.name)};
+async function download(){
+  if(!wb){msg('⚠ Aucun fichier chargé pour le moment','err');return}
+  writeBlocks(sheetOf(wb),days,tpl);
+  const b=new Blob([await wb.xlsx.writeBuffer()],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='Plan_V1.xlsx';a.click();
+  msg('⬇ Téléchargé — pense à le renvoyer sur GitHub pour sauvegarder','ok')}
 
 /* ---------- Interface ---------- */
 const fmt=d=>new Date(d+'T00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
@@ -111,11 +120,8 @@ const short=d=>new Date(d+'T00:00').toLocaleDateString('fr-FR',{weekday:'short',
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 const pct=d=>d.actions.length?Math.round(100*d.actions.filter(a=>stat(a.goal,a.done)==='✅ Fait').length/d.actions.length):0;
 const day=()=>days.find(x=>x.date===cur);
-function render(){updateChart();
-  if(!wb){$('#chips').innerHTML='';$('#path').textContent='🔗 '+DEFAULT_PATH+' (dans le dépôt)';
-   $('#view').innerHTML=`<div class="card hero"><h2>${connecting?'Connexion à ton fichier…':'Accès à Plan_V1.xlsx'}</h2>
-   ${connecting?'':`<p>Une seule autorisation du navigateur est nécessaire. Ensuite l'accès sera automatique à chaque ouverture.</p>
-   <button class="p" onclick="${handle?'reconnect()':'choose()'}">🔗 ${handle?'Reconnecter le fichier':'Autoriser l\'accès au fichier'}</button>`}</div>`;return}
+function render(){
+  updateChart();
   $('#chips').innerHTML=days.map(d=>`<button class="chip ${d.date===cur?'on':''}" onclick="cur='${d.date}';render()">${short(d.date)}<small>${pct(d)}%</small></button>`).join('')+`<button class="chip new" onclick="newDay()">＋ Jour</button>`;
   const d=day();
   if(!d){$('#view').innerHTML='<div class="card hero">Aucun jour. Clique sur « ＋ Jour ».</div>';return}
@@ -127,18 +133,18 @@ function render(){updateChart();
   <td><input class="n" value="${esc(a.done)}" placeholder="—" oninput="ed(${i},'done',this.value)"></td>
   <td class="st" id="s${i}">${stat(a.goal,a.done)}</td><td><button class="x" onclick="rmAct(${i})">✕</button></td></tr>`).join('')}</table></div>`}
 function ed(i,k,v){const d=day();d.actions[i][k]=v;$('#s'+i).textContent=stat(d.actions[i].goal,d.actions[i].done);
-  $('.bar i').style.width=pct(d)+'%';queue()}
-function queue(){msg('Enregistrement…');clearTimeout(timer);timer=setTimeout(writeFile,600)}
-function addAct(){day().actions.push({label:'Nouvelle action',goal:'',done:''});render();queue()}
-function rmAct(i){day().actions.splice(i,1);render();queue()}
+  $('.bar i').style.width=pct(d)+'%';touched()}
+function touched(){dirty=true;msg('✎ Modifié — clique sur « ⬇ Télécharger .xlsx » pour sauvegarder');clearTimeout(timer);timer=setTimeout(updateChart,400)}
+function addAct(){day().actions.push({label:'Nouvelle action',goal:'',done:''});render();touched()}
+function rmAct(i){day().actions.splice(i,1);render();touched()}
 function newDay(){const l=days.length?new Date(days[days.length-1].date+'T00:00:00Z'):new Date();if(days.length)l.setUTCDate(l.getUTCDate()+1);
   const v=prompt('Date du nouveau jour (AAAA-MM-JJ) :',l.toISOString().slice(0,10));if(!v)return;
-  if(!/^\d{4}-\d\d-\d\d$/.test(v))return msg('⚠ Format de date invalide',1);
-  if(days.find(d=>d.date===v))return msg('⚠ Ce jour existe déjà',1);
+  if(!/^\d{4}-\d\d-\d\d$/.test(v))return msg('⚠ Format de date invalide','err');
+  if(days.find(d=>d.date===v))return msg('⚠ Ce jour existe déjà','err');
   const prev=[...days].filter(d=>d.date<v).pop()||days[days.length-1];
   days.push({date:v,actions:(prev?prev.actions:[]).map(a=>({label:a.label,goal:a.goal,done:''}))});days.sort((a,b)=>a.date<b.date?-1:1);
-  cur=v;render();writeFile()}
-function delDay(){if(!confirm('Supprimer ce jour du fichier Excel ?'))return;days=days.filter(d=>d.date!==cur);cur=days.length?days[days.length-1].date:null;render();writeFile()}
+  cur=v;render();touched()}
+function delDay(){if(!confirm('Supprimer ce jour ?'))return;days=days.filter(d=>d.date!==cur);cur=days.length?days[days.length-1].date:null;render();touched()}
 
 /* ---------- Graphique : suivi des actions par jour ---------- */
 const COLORS=['#2f6feb','#1e9e5a','#d99a00','#d64545','#9b59d0','#17a2b8'];
@@ -148,31 +154,23 @@ function completion(a){const g=num(a.goal),d=num(a.done);
   const s=stat(a.goal,a.done);return s==='✅ Fait'?100:s==='🟡 En cours'?50:0}
 function updateChart(){
   const card=$('#chartCard');
-  if(!wb||!days.length){card.hidden=true;return}
-  const sorted=[...days].sort((a,b)=>a.date<b.date?-1:1);
-  const labels=[...new Set(sorted.flatMap(d=>d.actions.map(a=>a.label)))].filter(Boolean).slice(0,6);
-  if(!labels.length){card.hidden=true;return}
-  card.hidden=false;
-  const datasets=labels.map((lab,i)=>({
-    label:lab,
-    data:sorted.map(d=>{const a=d.actions.find(x=>x.label===lab);return a?completion(a):null}),
-    borderColor:COLORS[i%COLORS.length],backgroundColor:COLORS[i%COLORS.length],
-    tension:.3,spanGaps:true,pointRadius:3}));
-  const data={labels:sorted.map(d=>short(d.date)),datasets};
-  if(chart){chart.data=data;chart.update()}
-  else chart=new Chart($('#trend'),{type:'line',data,
-    options:{responsive:true,maintainAspectRatio:false,
-      scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%'}}},
-      plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:11}}}}}})}
-
-/* ---------- Démarrage automatique : ouvre le fichier lié sans rien demander ---------- */
-(async()=>{
+  if(!wb||!days.length||typeof Chart==='undefined'){card.hidden=true;return}
   try{
-    if(FSA){handle=await idbGet('h');
-      if(handle&&await handle.queryPermission({mode:'readwrite'})==='granted'){await readHandle();connecting=false;return}}
-    // Fichier hébergé à côté de la page (même dépôt) : accès direct et automatique, en lecture seule
-    const r=await fetch(DEFAULT_PATH,{cache:'no-store'});
-    if(r.ok){ro=true;handle=null;await parse(await r.arrayBuffer());connecting=false;return}
-  }catch(e){}
-  connecting=false;render()})();
+    const sorted=[...days].sort((a,b)=>a.date<b.date?-1:1);
+    const labels=[...new Set(sorted.flatMap(d=>d.actions.map(a=>a.label)))].filter(Boolean).slice(0,6);
+    if(!labels.length){card.hidden=true;return}
+    card.hidden=false;
+    const datasets=labels.map((lab,i)=>({label:lab,
+      data:sorted.map(d=>{const a=d.actions.find(x=>x.label===lab);return a?completion(a):null}),
+      borderColor:COLORS[i%COLORS.length],backgroundColor:COLORS[i%COLORS.length],
+      tension:.3,spanGaps:true,pointRadius:3}));
+    const data={labels:sorted.map(d=>short(d.date)),datasets};
+    if(chart){chart.data=data;chart.update()}
+    else chart=new Chart($('#trend'),{type:'line',data,
+      options:{responsive:true,maintainAspectRatio:false,
+        scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%'}}},
+        plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:11}}}}}})
+  }catch(e){card.hidden=true}}
+
+autoload();
 </script></body></html>
