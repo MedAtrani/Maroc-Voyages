@@ -50,7 +50,7 @@ button.p{background:var(--ac);border-color:var(--ac);color:#fff}button.x{border:
 <div id="path"></div>
 <div id="msg"></div>
 <div id="chips"></div><div id="view"></div>
-<div class="card" id="chartCard" hidden><h2 style="margin:0 0 12px;font-size:17px">📈 Suivi des actions par jour</h2><div style="position:relative;height:260px"><canvas id="trend"></canvas></div></div>
+<div class="card" id="chartCard" hidden><h2 style="margin:0 0 12px;font-size:17px">📈 Suivi des actions par jour (nombre de séances)</h2><div style="position:relative;height:260px"><canvas id="trend"></canvas></div></div>
 </main>
 <script>
 /* ---------- Connexion GitHub (lecture + écriture automatique du fichier dans le dépôt) ---------- */
@@ -103,7 +103,8 @@ const clean=v=>{if(v==null)return'';if(v instanceof Date)return v.toISOString().
 const num=v=>{const m=String(v||'').match(/\d+(?:[.,]\d+)?/);return m?parseFloat(m[0].replace(',','.')):null};
 const stat=(g,d)=>{const x=num(d);if(x===null)return'';const o=num(g);return(o===null||x>=o)?'✅ Fait':x>0?'🟡 En cours':'❌ Non fait'};
 const fGoal=g=>{g=clean(g);return /^\d+$/.test(g)?+g:(g||null)};
-const fDone=(g,d)=>{d=clean(d);if(/^\d+(?:[.,]\d+)?$/.test(d))return /min/i.test(g)?d+'min':parseFloat(d.replace(',','.'));return d||null};
+/* Réalisé : toujours un nombre (1, 2, 3…), plus de « 30min » */
+const fDone=(g,d)=>{d=clean(d);if(/^\d+(?:[.,]\d+)?$/.test(d))return parseFloat(d.replace(',','.'));return d||null};
 function sheetOf(wb){return wb.getWorksheet('Plan')||wb.worksheets[0]}
 function readBlocks(ws){const bl=[];let cur=null;
   for(let r=4;r<=ws.rowCount;r++){const b=clean(ws.getCell(r,2).value);
@@ -188,8 +189,8 @@ function render(){
   <div class="bar"><i style="width:${pct(d)}%"></i></div>
   <table><tr><th>Action</th><th>Objectif/jour</th><th>Réalisé</th><th>Status</th><th></th></tr>
   ${d.actions.map((a,i)=>`<tr><td><input value="${esc(a.label)}" oninput="ed(${i},'label',this.value)"></td>
-  <td><input class="n" value="${esc(a.goal)}" oninput="ed(${i},'goal',this.value)"></td>
-  <td><input class="n" value="${esc(a.done)}" placeholder="—" oninput="ed(${i},'done',this.value)"></td>
+  <td><input class="n" inputmode="numeric" value="${esc(a.goal)}" placeholder="1, 2, 3…" oninput="ed(${i},'goal',this.value)"></td>
+  <td><input class="n" inputmode="numeric" value="${esc(a.done)}" placeholder="—" oninput="ed(${i},'done',this.value)"></td>
   <td class="st" id="s${i}">${stat(a.goal,a.done)}</td><td><button class="x" onclick="rmAct(${i})">✕</button></td></tr>`).join('')}</table></div>`}
 function ed(i,k,v){const d=day();d.actions[i][k]=v;$('#s'+i).textContent=stat(d.actions[i].goal,d.actions[i].done);
   $('.bar i').style.width=pct(d)+'%';touched()}
@@ -207,12 +208,11 @@ function newDay(){const l=days.length?new Date(days[days.length-1].date+'T00:00:
   cur=v;render();touched()}
 function delDay(){if(!confirm('Supprimer ce jour ?'))return;days=days.filter(d=>d.date!==cur);cur=days.length?days[days.length-1].date:null;render();touched()}
 
-/* ---------- Graphique : suivi des actions par jour ---------- */
+/* ---------- Graphique : nombre réalisé par action et par jour ---------- */
 const COLORS=['#2f6feb','#1e9e5a','#d99a00','#d64545','#9b59d0','#17a2b8'];
 let chart=null;
-function completion(a){const g=num(a.goal),d=num(a.done);
-  if(g&&d!=null)return Math.max(0,Math.min(100,Math.round(100*d/g)));
-  const s=stat(a.goal,a.done);return s==='✅ Fait'?100:s==='🟡 En cours'?50:0}
+/* Valeur affichée = le nombre réalisé tel quel (3 = 3 séances), plus de pourcentage */
+function realised(a){const d=num(a.done);return d==null?null:d}
 function updateChart(){
   const card=$('#chartCard');
   if(!wb||!days.length||typeof Chart==='undefined'){card.hidden=true;return}
@@ -222,14 +222,14 @@ function updateChart(){
     if(!labels.length){card.hidden=true;return}
     card.hidden=false;
     const datasets=labels.map((lab,i)=>({label:lab,
-      data:sorted.map(d=>{const a=d.actions.find(x=>x.label===lab);return a?completion(a):null}),
+      data:sorted.map(d=>{const a=d.actions.find(x=>x.label===lab);return a?realised(a):null}),
       borderColor:COLORS[i%COLORS.length],backgroundColor:COLORS[i%COLORS.length],
       tension:.3,spanGaps:true,pointRadius:3}));
     const data={labels:sorted.map(d=>short(d.date)),datasets};
     if(chart){chart.data=data;chart.update()}
     else chart=new Chart($('#trend'),{type:'line',data,
       options:{responsive:true,maintainAspectRatio:false,
-        scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%'}}},
+        scales:{y:{beginAtZero:true,ticks:{precision:0,stepSize:1}}},
         plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:11}}}}}})
   }catch(e){card.hidden=true}}
 
